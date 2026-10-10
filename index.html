@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Reporte SIMIR</title>
 <!--
-  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.0 (SIMIR v6.29)
+  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.1 (SIMIR v6.46)
   Pedido por Luis Espinel (03/10/2026). Página estática: no contiene secretos.
+  v1.1 (10/10/2026, Luis Espinel): EVIDENCIA del trabajador — foto con la cámara o, desde la galería,
+  capture, foto, video, audio o PDF (hasta 3 archivos, 14 MB en total). Las fotos se reducen en el
+  teléfono (lado mayor 2048 px, JPG) sin perder legibilidad del texto; el servidor verifica el tipo real.
   La identidad del trabajador la certifica Telegram (initData firmado) y la valida
   19_MINIAPP.gs en el servidor. ÚNICO dato a configurar: SIMIR_ENDPOINT (abajo).
 -->
@@ -86,6 +89,30 @@
   .exito .marca { font-size: 44px; line-height: 1; }
   .exito h2 { font-size: 20px; margin: 14px 0 6px; }
   .exito p { color: var(--tenue); margin: 0 0 4px; }
+  /* v1.1 — evidencia multimedia */
+  .botones-ev { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .boton-ev {
+    display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 48px;
+    font: inherit; font-weight: 600; font-size: 14px; color: var(--enlace); background: var(--fondo-2);
+    border: 1.5px dashed var(--enlace); border-radius: 10px; padding: 10px 8px; cursor: pointer; text-align: center;
+  }
+  .boton-ev[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+  .oculto { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .lista-ev { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+  .lista-ev li {
+    display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 10px;
+    background: var(--fondo-2); border-radius: 10px; padding: 8px;
+  }
+  .miniatura {
+    width: 52px; height: 52px; border-radius: 8px; object-fit: cover; background: var(--fondo);
+    display: flex; align-items: center; justify-content: center; font-size: 24px;
+  }
+  .nombre-ev { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peso-ev { font-size: 12px; color: var(--tenue); }
+  .quitar-ev {
+    font: inherit; font-size: 13px; color: var(--error); background: transparent; border: 0;
+    padding: 10px 6px; cursor: pointer; min-height: 44px;
+  }
   .lema { text-align: center; font-weight: 800; font-size: 13px; color: var(--institucional); margin-top: 22px; }
   @media (prefers-reduced-motion: no-preference) {
     .exito.visible .marca { animation: aparecer .35s ease-out; }
@@ -146,6 +173,18 @@
       </div>
 
       <div class="campo">
+        <span class="etiqueta" id="et-ev">Evidencia <span class="opcional">(recomendada)</span></span>
+        <div class="botones-ev" role="group" aria-labelledby="et-ev">
+          <label class="boton-ev" id="btnCamara" for="camara">📷 Tomar foto</label>
+          <label class="boton-ev" id="btnGaleria" for="galeria">🖼️ Galería o archivo</label>
+        </div>
+        <input class="oculto" id="camara" type="file" accept="image/*" capture="environment">
+        <input class="oculto" id="galeria" type="file" accept="image/*,video/*,audio/*,application/pdf" multiple>
+        <ul id="listaEv" class="lista-ev" aria-live="polite"></ul>
+        <div class="ayuda" id="ayudaEv">Capture de la publicación (que se vea el texto y la imagen), foto, video, audio o PDF. Hasta 3 archivos; video o audio de hasta 8 MB.</div>
+      </div>
+
+      <div class="campo">
         <label for="comentario">Contexto <span class="opcional">(opcional)</span></label>
         <textarea id="comentario" name="comentario" maxlength="500"
                   placeholder="Lo que sabes y la publicación no dice: sector, municipio, hora…"></textarea>
@@ -177,6 +216,96 @@
   var form = $('formulario'), aviso = $('aviso');
   var enviando = false;
   var fuenteEditadaAMano = false, viaEditadaAMano = false;
+
+  /* ===== v1.1 — EVIDENCIA ===== */
+  var MAX_ARCHIVOS = 3, MAX_TOTAL = 14 * 1024 * 1024, MAX_MEDIO = 8 * 1024 * 1024, MAX_IMAGEN = 5 * 1024 * 1024, LADO_MAX = 2048;
+  var evidencias = []; // { nombre, mime, datos (base64), tamano, tipo, vista }
+  var preparando = 0;
+
+  function pesoTexto(b) { return b >= 1048576 ? (Math.round(b / 104857.6) / 10) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+  function tipoDe(mime) {
+    if (/^image\//.test(mime)) return 'IMAGEN';
+    if (/^video\//.test(mime)) return 'VIDEO';
+    if (/^audio\//.test(mime)) return 'AUDIO';
+    if (mime === 'application/pdf') return 'DOCUMENTO';
+    return '';
+  }
+  function leerBase64(blob) {
+    return new Promise(function (ok, mal) {
+      var r = new FileReader();
+      r.onload = function () { ok(String(r.result).replace(/^data:[^,]*,/, '')); };
+      r.onerror = function () { mal(new Error('lectura')); };
+      r.readAsDataURL(blob);
+    });
+  }
+  // Foto → JPG con lado mayor de 2048 px (el texto de un capture sigue legible). Si ya es un JPG liviano, se envía tal cual.
+  function prepararImagen(file) {
+    return new Promise(function (ok, mal) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth, h = img.naturalHeight, escala = Math.min(1, LADO_MAX / Math.max(w, h));
+        if (file.type === 'image/jpeg' && escala === 1 && file.size <= 1.5 * 1048576) { URL.revokeObjectURL(url); ok({ blob: file, vista: URL.createObjectURL(file) }); return; }
+        if (file.type === 'image/gif' && file.size <= MAX_IMAGEN) { URL.revokeObjectURL(url); ok({ blob: file, vista: URL.createObjectURL(file) }); return; }
+        var c = document.createElement('canvas');
+        c.width = Math.round(w * escala); c.height = Math.round(h * escala);
+        var ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { b ? ok({ blob: b, vista: URL.createObjectURL(b) }) : mal(new Error('conversión')); }, 'image/jpeg', 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); mal(new Error('formato')); };
+      img.src = url;
+    });
+  }
+  function totalEvidencias() { return evidencias.reduce(function (t, e) { return t + e.tamano; }, 0); }
+  function pintarEvidencias() {
+    var ul = $('listaEv'); ul.innerHTML = '';
+    evidencias.forEach(function (e, i) {
+      var li = document.createElement('li');
+      var mini;
+      if (e.tipo === 'IMAGEN' && e.vista) { mini = document.createElement('img'); mini.src = e.vista; mini.alt = ''; }
+      else { mini = document.createElement('div'); mini.textContent = { VIDEO: '🎬', AUDIO: '🎙️', DOCUMENTO: '📄' }[e.tipo] || '📎'; }
+      mini.className = 'miniatura';
+      var info = document.createElement('div');
+      var n = document.createElement('div'); n.className = 'nombre-ev'; n.textContent = e.nombre;
+      var p = document.createElement('div'); p.className = 'peso-ev'; p.textContent = { IMAGEN: 'Foto', VIDEO: 'Video', AUDIO: 'Audio', DOCUMENTO: 'PDF' }[e.tipo] + ' · ' + pesoTexto(e.tamano);
+      info.appendChild(n); info.appendChild(p);
+      var q = document.createElement('button'); q.type = 'button'; q.className = 'quitar-ev'; q.textContent = 'Quitar';
+      q.setAttribute('aria-label', 'Quitar ' + e.nombre);
+      q.addEventListener('click', function () { if (e.vista) URL.revokeObjectURL(e.vista); evidencias.splice(i, 1); pintarEvidencias(); });
+      li.appendChild(mini); li.appendChild(info); li.appendChild(q); ul.appendChild(li);
+    });
+    if (preparando) { var li2 = document.createElement('li'); li2.innerHTML = '<div class="miniatura">⏳</div><div class="peso-ev">Preparando archivo…</div><span></span>'; ul.appendChild(li2); }
+    var lleno = evidencias.length + preparando >= MAX_ARCHIVOS;
+    $('btnCamara').setAttribute('aria-disabled', lleno ? 'true' : 'false');
+    $('btnGaleria').setAttribute('aria-disabled', lleno ? 'true' : 'false');
+  }
+  function agregarArchivos(lista) {
+    limpiarAviso();
+    Array.prototype.slice.call(lista || []).forEach(function (file) {
+      if (evidencias.length + preparando >= MAX_ARCHIVOS) { mostrarAviso('Puedes adjuntar hasta ' + MAX_ARCHIVOS + ' archivos.'); return; }
+      var ext = String(file.name || '').split('.').pop().toLowerCase();
+      var tipo = tipoDe(file.type || ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic',
+        mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
+        mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', pdf: 'application/pdf' }[ext] || ''));
+      if (!tipo) { mostrarAviso('"' + file.name + '" no es foto, video, audio ni PDF.'); return; }
+      if (tipo !== 'IMAGEN' && file.size > MAX_MEDIO) { mostrarAviso('"' + file.name + '" pesa ' + pesoTexto(file.size) + '; el máximo es 8 MB. Envía un video más corto.'); return; }
+      preparando++; pintarEvidencias();
+      var paso = tipo === 'IMAGEN' ? prepararImagen(file) : Promise.resolve({ blob: file, vista: '' });
+      paso.then(function (r) {
+        if (r.blob.size > (tipo === 'IMAGEN' ? MAX_IMAGEN : MAX_MEDIO)) throw new Error('peso');
+        if (totalEvidencias() + r.blob.size > MAX_TOTAL) throw new Error('total');
+        return leerBase64(r.blob).then(function (b64) {
+          evidencias.push({ nombre: file.name || ('evidencia.' + (tipo === 'IMAGEN' ? 'jpg' : 'bin')), mime: r.blob.type || file.type, datos: b64, tamano: r.blob.size, tipo: tipo, vista: r.vista });
+        });
+      }).catch(function (e) {
+        mostrarAviso(e && e.message === 'total' ? 'Los archivos suman más de 14 MB. Quita alguno.' :
+          e && e.message === 'peso' ? '"' + file.name + '" es demasiado pesado.' : 'No se pudo preparar "' + file.name + '". Prueba con otro archivo o con un capture.');
+      }).then(function () { preparando--; pintarEvidencias(); });
+    });
+  }
+  $('camara').addEventListener('change', function () { agregarArchivos(this.files); this.value = ''; });
+  $('galeria').addEventListener('change', function () { agregarArchivos(this.files); this.value = ''; });
 
   function mostrarAviso(texto, tipo) {
     aviso.textContent = texto;
@@ -258,6 +387,7 @@
 
   function enviar() {
     if (enviando) return;
+    if (preparando) { mostrarAviso('Espera a que termine de prepararse el archivo.', 'info'); return; }
     limpiarAviso();
     var d = leerDatos(), faltan = validar(d);
     if (faltan.length) {
@@ -266,13 +396,16 @@
       return;
     }
     bloquear(true);
+    if (evidencias.length) mostrarAviso('Enviando el reporte con ' + evidencias.length + ' evidencia(s)… puede tardar según la señal. No cierres el formulario.', 'info');
     var controlador = ('AbortController' in window) ? new AbortController() : null;
-    var temporizador = setTimeout(function () { if (controlador) controlador.abort(); }, 45000);
+    // v1.1 — con evidencia, más margen: el envío sube los archivos.
+    var temporizador = setTimeout(function () { if (controlador) controlador.abort(); }, evidencias.length ? 180000 : 45000);
     // text/plain evita el preflight CORS que Apps Script no atiende; el servidor lo lee como JSON.
     fetch(SIMIR_ENDPOINT, {
       method: 'POST', redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ initData: initData, datos: d }),
+      body: JSON.stringify({ initData: initData, datos: d,
+        archivos: evidencias.map(function (e) { return { nombre: e.nombre, mime: e.mime, datos: e.datos }; }) }),
       signal: controlador ? controlador.signal : undefined
     })
       .then(function (resp) { return resp.json(); })
@@ -286,7 +419,8 @@
       .catch(function () {
         clearTimeout(temporizador);
         bloquear(false);
-        mostrarAviso('Sin respuesta del servidor. Revisa tu conexión y toca Enviar reporte de nuevo; si persiste, envía el link al grupo.');
+        mostrarAviso('Sin respuesta del servidor. Revisa tu conexión y toca Enviar reporte de nuevo' +
+          (evidencias.length ? ' (si la señal es débil, prueba con menos archivos o un video más corto)' : '') + '; si persiste, envía el link al grupo.');
         if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
       });
   }

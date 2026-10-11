@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Reporte SIMIR</title>
 <!--
-  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.1 (SIMIR v6.46)
+  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.2 (SIMIR v6.48)
   Pedido por Luis Espinel (03/10/2026). Página estática: no contiene secretos.
+  v1.2 (10/10/2026, Luis Espinel): campo TIPO DE HECHO como lista desplegable DINÁMICA. Al abrirse, la página
+  pide la lista a SIMIR (CATALOGOS.TIPO_HECHO, que la gerencia edita en la hoja); no hay que volver a subir este
+  archivo para cambiarla. Primera opción: "Que lo determine la IA". Si SIMIR no responde, usa la última lista
+  recibida en este teléfono o, si no hay, la lista inicial de abajo.
   v1.1 (10/10/2026, Luis Espinel): EVIDENCIA del trabajador — foto con la cámara o, desde la galería,
   capture, foto, video, audio o PDF (hasta 3 archivos, 14 MB en total). Las fotos se reducen en el
   teléfono (lado mayor 2048 px, JPG) sin perder legibilidad del texto; el servidor verifica el tipo real.
@@ -170,6 +174,14 @@
           <input type="radio" name="sentimiento" id="s-neu" value="NEUTRA"><label for="s-neu">Neutra</label>
           <input type="radio" name="sentimiento" id="s-ia" value="IA" checked><label for="s-ia" class="ia">Que lo determine la IA</label>
         </div>
+      </div>
+
+      <div class="campo">
+        <label for="tipoHecho">Tipo de hecho</label>
+        <select id="tipoHecho" name="tipoHecho">
+          <option value="IA">Que lo determine la IA</option>
+        </select>
+        <div class="ayuda" id="ayudaHecho">Qué reporta la publicación. Si no estás seguro, deja que lo determine la IA.</div>
       </div>
 
       <div class="campo">
@@ -355,6 +367,7 @@
       via: $('via').value,
       fuente: $('fuente').value.trim(),
       sentimiento: s ? s.value : 'IA',
+      tipoHecho: $('tipoHecho').value || 'IA', // v1.2
       comentario: $('comentario').value.trim()
     };
   }
@@ -426,6 +439,62 @@
   }
 
   form.addEventListener('submit', function (ev) { ev.preventDefault(); enviar(); });
+
+  /* ===== v1.2 — TIPO DE HECHO: lista desplegable dinámica (CATALOGOS.TIPO_HECHO de SIMIR) ===== */
+  // Solo se usa si SIMIR no responde y este teléfono nunca recibió la lista.
+  var TIPOS_INICIALES = [
+    { v: 'MANIFESTACION', r: 'Manifestación', d: 'Protesta, cierre de vía, cacerolazo o concentración por el servicio eléctrico' },
+    { v: 'DENUNCIA_INTERRUPCION', r: 'Denuncia de interrupción', d: 'Usuarios denuncian cortes o apagones, sin protesta' },
+    { v: 'DENUNCIA_CALIDAD', r: 'Denuncia de calidad del servicio', d: 'Bajones, fluctuaciones de voltaje, equipos dañados por el voltaje' },
+    { v: 'ANUNCIO_PAC', r: 'Anuncio de PAC', d: 'Publicación de horarios o bloques del Plan de Administración de Carga' },
+    { v: 'MANTENIMIENTO_OBRA', r: 'Mantenimiento u obra', d: 'Trabajos programados, sustitución de transformadores, obras' },
+    { v: 'RESTITUCION_SERVICIO', r: 'Restitución del servicio', d: 'Atención de averías y restablecimiento del servicio' },
+    { v: 'INCIDENTE_INFRAESTRUCTURA', r: 'Incidente en infraestructura', d: 'Incendio, explosión, poste o línea caída en instalaciones eléctricas' },
+    { v: 'HURTO_VANDALISMO', r: 'Hurto o vandalismo', d: 'Hurto de cables o equipos, vandalismo contra instalaciones' },
+    { v: 'RIESGO_ELECTRICO', r: 'Riesgo eléctrico', d: 'Cables expuestos, tomas ilegales, accidentes de personas' },
+    { v: 'GESTION_INSTITUCIONAL', r: 'Gestión institucional', d: 'Actos, convenios, declaraciones y boletines institucionales' },
+    { v: 'ATENCION_COMERCIAL', r: 'Atención comercial', d: 'Facturación, tarifas, cobros y oficinas comerciales' },
+    { v: 'OTRO', r: 'Otro', d: 'Lo que no encaje en los demás tipos' }
+  ];
+  var AYUDA_HECHO = 'Qué reporta la publicación. Si no estás seguro, deja que lo determine la IA.';
+  var definiciones = {};
+  function pintarTiposHecho(lista) {
+    var sel = $('tipoHecho'), previo = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    definiciones = {};
+    (lista || []).forEach(function (t) {
+      if (!t || !t.v) return;
+      var o = document.createElement('option');
+      o.value = t.v; o.textContent = t.r || t.v;
+      sel.appendChild(o);
+      definiciones[t.v] = t.d || '';
+    });
+    sel.value = definiciones.hasOwnProperty(previo) ? previo : 'IA';
+    $('ayudaHecho').textContent = definiciones[sel.value] || AYUDA_HECHO;
+  }
+  $('tipoHecho').addEventListener('change', function () { $('ayudaHecho').textContent = definiciones[this.value] || AYUDA_HECHO; });
+  function leerListaGuardada() { try { var x = JSON.parse(localStorage.getItem('simir_tipos_hecho') || 'null'); return Array.isArray(x) && x.length ? x : null; } catch (e) { return null; } }
+  function cargarTiposHecho() {
+    pintarTiposHecho(leerListaGuardada() || TIPOS_INICIALES);
+    if (!initData) return;
+    var controlador = ('AbortController' in window) ? new AbortController() : null;
+    var temporizador = setTimeout(function () { if (controlador) controlador.abort(); }, 20000);
+    fetch(SIMIR_ENDPOINT, {
+      method: 'POST', redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ accion: 'catalogo', initData: initData }),
+      signal: controlador ? controlador.signal : undefined
+    })
+      .then(function (resp) { return resp.json(); })
+      .then(function (r) {
+        clearTimeout(temporizador);
+        if (!r || !r.ok || !Array.isArray(r.tiposHecho) || !r.tiposHecho.length) return;
+        pintarTiposHecho(r.tiposHecho);
+        try { localStorage.setItem('simir_tipos_hecho', JSON.stringify(r.tiposHecho)); } catch (e) {}
+      })
+      .catch(function () { clearTimeout(temporizador); });
+  }
+  cargarTiposHecho();
 
   if (!initData) {
     // Abierta fuera de Telegram: el servidor rechazaría el envío igual (sin firma), así que se avisa antes.

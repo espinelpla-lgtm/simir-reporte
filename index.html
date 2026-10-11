@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Reporte SIMIR</title>
 <!--
-  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.2 (SIMIR v6.48)
+  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.3 (SIMIR v6.52)
+  v1.3 (11/10/2026, Luis Espinel): VÍA "Threads" en la lista y detectada en el link (threads.com / threads.net).
   Pedido por Luis Espinel (03/10/2026). Página estática: no contiene secretos.
   v1.2 (10/10/2026, Luis Espinel): campo TIPO DE HECHO como lista desplegable DINÁMICA. Al abrirse, la página
   pide la lista a SIMIR (CATALOGOS.TIPO_HECHO, que la gerencia edita en la hoja); no hay que volver a subir este
@@ -150,6 +151,7 @@
           <option>TikTok</option>
           <option value="Twitter/X">X (Twitter)</option>
           <option>YouTube</option>
+          <option>Threads</option>
           <option>WhatsApp</option>
           <option>Telegram</option>
           <option>Portal de noticias</option>
@@ -328,6 +330,7 @@
   // Mismos criterios que detectarMedioPorDominio_ y extraerCuentaDeUrl_ (06_INGRESO_REPORTES.gs).
   function detectarVia(url) {
     var l = url.toLowerCase();
+    if (/(^|\/\/|\.)threads\.(net|com)\//.test(l)) return 'Threads';
     if (l.indexOf('instagram.com') !== -1) return 'Instagram';
     if (l.indexOf('twitter.com') !== -1 || /(^|\/\/|\.)x\.com/.test(l)) return 'Twitter/X';
     if (l.indexOf('facebook.com') !== -1 || l.indexOf('fb.watch') !== -1) return 'Facebook';
@@ -338,7 +341,7 @@
     return /^https?:\/\/[^\/\s]+\.[^\/\s]+/.test(l) ? 'Portal de noticias' : '';
   }
   function detectarFuente(url, via) {
-    var m = url.match(/tiktok\.com\/(@[\w.\-]+)/i);
+    var m = url.match(/(?:tiktok\.com|threads\.(?:net|com))\/(@[\w.\-]+)/i);
     if (m) return m[1];
     m = url.match(/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]+)\/status\//i);
     if (m && m[1].toLowerCase() !== 'i') return '@' + m[1];

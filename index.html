@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Reporte SIMIR</title>
 <!--
-  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.3 (SIMIR v6.52)
+  SIMIR | CORPOELEC GSI | MÉRIDA — Mini App /reporte_SIMIR — v1.4 (SIMIR v6.56)
+  v1.4 (12/10/2026, Luis Espinel): campo UBICACIÓN — MUNICIPIO y PARROQUIA en listas (hoja TERRITORIO de SIMIR,
+  enviadas al abrir; si SIMIR no responde, la última lista recibida o la lista inicial de abajo) y SECTOR Y DIRECCIÓN
+  EXACTA de la avería en texto, con sugerencias de sectores. Obligatorios municipio y dirección en los tipos de hecho
+  que defina la gerencia (CONFIGURACION.UBICACION_OBLIGATORIA_TIPOS). La versión se ve al pie del formulario.
   v1.3 (11/10/2026, Luis Espinel): VÍA "Threads" en la lista y detectada en el link (threads.com / threads.net).
   Pedido por Luis Espinel (03/10/2026). Página estática: no contiene secretos.
   v1.2 (10/10/2026, Luis Espinel): campo TIPO DE HECHO como lista desplegable DINÁMICA. Al abrirse, la página
@@ -119,6 +123,10 @@
     padding: 10px 6px; cursor: pointer; min-height: 44px;
   }
   .lema { text-align: center; font-weight: 800; font-size: 13px; color: var(--institucional); margin-top: 22px; }
+  .version { text-align: center; font-size: 11px; color: var(--tenue); margin-top: 4px; }
+  /* v1.4 — ubicación */
+  .ubicacion { display: grid; gap: 8px; }
+  .requerida { font-weight: 600; color: var(--error); }
   @media (prefers-reduced-motion: no-preference) {
     .exito.visible .marca { animation: aparecer .35s ease-out; }
     @keyframes aparecer { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -187,6 +195,22 @@
       </div>
 
       <div class="campo">
+        <span class="etiqueta" id="et-ubic">Ubicación <span class="opcional" id="ubicMarca">(opcional)</span></span>
+        <div class="ubicacion" role="group" aria-labelledby="et-ubic">
+          <select id="municipio" name="municipio" aria-label="Municipio">
+            <option value="">Municipio</option>
+          </select>
+          <select id="parroquia" name="parroquia" aria-label="Parroquia" disabled>
+            <option value="">Parroquia (si la sabes)</option>
+          </select>
+          <input id="direccion" name="direccion" type="text" maxlength="300" autocomplete="off" list="listaSectores"
+                 aria-label="Sector y dirección exacta" placeholder="Sector y dirección exacta de la avería">
+          <datalist id="listaSectores"></datalist>
+        </div>
+        <div class="ayuda" id="ayudaUbic">Sector, calle o avenida y un punto de referencia. Ej.: Sector El Chama, av. principal, frente a la escuela.</div>
+      </div>
+
+      <div class="campo">
         <span class="etiqueta" id="et-ev">Evidencia <span class="opcional">(recomendada)</span></span>
         <div class="botones-ev" role="group" aria-labelledby="et-ev">
           <label class="boton-ev" id="btnCamara" for="camara">📷 Tomar foto</label>
@@ -201,7 +225,7 @@
       <div class="campo">
         <label for="comentario">Contexto <span class="opcional">(opcional)</span></label>
         <textarea id="comentario" name="comentario" maxlength="500"
-                  placeholder="Lo que sabes y la publicación no dice: sector, municipio, hora…"></textarea>
+                  placeholder="Lo que sabes y la publicación no dice: hora, duración, afectados…"></textarea>
       </div>
 
       <button id="enviarRespaldo" type="submit">Enviar reporte</button>
@@ -214,6 +238,7 @@
     </section>
 
     <div class="lema">¡PREVENIR ES PROTEGER!</div>
+    <div class="version">Formulario v1.4</div>
   </main>
 
 <script>
@@ -371,6 +396,7 @@
       fuente: $('fuente').value.trim(),
       sentimiento: s ? s.value : 'IA',
       tipoHecho: $('tipoHecho').value || 'IA', // v1.2
+      municipio: $('municipio').value, parroquia: $('parroquia').value, direccion: $('direccion').value.trim(), // v1.4
       comentario: $('comentario').value.trim()
     };
   }
@@ -380,6 +406,10 @@
     if (!/^https?:\/\/[^\/\s]+\.[^\/\s]+/i.test(d.link) || /\s/.test(d.link)) { $('link').classList.add('invalido'); faltan.push('un link válido (https://…)'); }
     if (!d.via) { $('via').classList.add('invalido'); faltan.push('la vía'); }
     if (!d.fuente) { $('fuente').classList.add('invalido'); faltan.push('la fuente'); }
+    if (ubicacionObligatoria(d.tipoHecho)) { // v1.4
+      if (!d.municipio) { $('municipio').classList.add('invalido'); faltan.push('el municipio'); }
+      if (!d.direccion) { $('direccion').classList.add('invalido'); faltan.push('el sector y la dirección exacta'); }
+    }
     return faltan;
   }
 
@@ -475,7 +505,7 @@
     sel.value = definiciones.hasOwnProperty(previo) ? previo : 'IA';
     $('ayudaHecho').textContent = definiciones[sel.value] || AYUDA_HECHO;
   }
-  $('tipoHecho').addEventListener('change', function () { $('ayudaHecho').textContent = definiciones[this.value] || AYUDA_HECHO; });
+  $('tipoHecho').addEventListener('change', function () { $('ayudaHecho').textContent = definiciones[this.value] || AYUDA_HECHO; marcarUbicacion(); });
   function leerListaGuardada() { try { var x = JSON.parse(localStorage.getItem('simir_tipos_hecho') || 'null'); return Array.isArray(x) && x.length ? x : null; } catch (e) { return null; } }
   function cargarTiposHecho() {
     pintarTiposHecho(leerListaGuardada() || TIPOS_INICIALES);
@@ -491,12 +521,93 @@
       .then(function (resp) { return resp.json(); })
       .then(function (r) {
         clearTimeout(temporizador);
+        if (r && r.ok && r.territorio && Array.isArray(r.territorio.municipios) && r.territorio.municipios.length) { // v1.4
+          pintarTerritorio(r.territorio);
+          try { localStorage.setItem('simir_territorio', JSON.stringify(r.territorio)); } catch (e) {}
+        }
         if (!r || !r.ok || !Array.isArray(r.tiposHecho) || !r.tiposHecho.length) return;
         pintarTiposHecho(r.tiposHecho);
         try { localStorage.setItem('simir_tipos_hecho', JSON.stringify(r.tiposHecho)); } catch (e) {}
       })
       .catch(function () { clearTimeout(temporizador); });
   }
+  /* ===== v1.4 — UBICACIÓN: municipio y parroquia (TERRITORIO de SIMIR) y sector y dirección exacta ===== */
+  // Lista inicial (división político-territorial; la gerencia la mantiene en la hoja TERRITORIO). Solo si SIMIR no responde.
+  var P = function (m, e, lista) { return { v: m, e: e, p: lista.map(function (x) { return { v: x }; }) }; };
+  var TERRITORIO_INICIAL = { obligatoria: ['DENUNCIA_INTERRUPCION', 'DENUNCIA_CALIDAD', 'INCIDENTE_INFRAESTRUCTURA', 'RIESGO_ELECTRICO'], sectores: [], municipios: [
+    P('ALBERTO ADRIANI', 'MÉRIDA', ['GABRIEL PICÓN GONZÁLEZ', 'HÉCTOR AMABLE MORA', 'JOSÉ NUCETE SARDI', 'PRESIDENTE BETANCOURT', 'PRESIDENTE PÁEZ', 'PRESIDENTE RÓMULO GALLEGOS', 'PULIDO MÉNDEZ']),
+    P('ANDRÉS BELLO', 'MÉRIDA', ['LA AZULITA']), P('ANTONIO PINTO SALINAS', 'MÉRIDA', ['MESA BOLÍVAR', 'MESA DE LAS PALMAS', 'SANTA CRUZ DE MORA']),
+    P('ARICAGUA', 'MÉRIDA', ['ARICAGUA', 'SAN ANTONIO']), P('ARZOBISPO CHACÓN', 'MÉRIDA', ['CANAGUÁ', 'CAPURÍ', 'CHACANTÁ', 'EL MOLINO', 'GUAIMARAL', 'MUCUCHACHÍ', 'MUCUTUY']),
+    P('CAMPO ELÍAS', 'MÉRIDA', ['ACEQUIAS', 'FERNÁNDEZ PEÑA', 'JAJÍ', 'LA MESA', 'MATRIZ', 'MONTALBÁN', 'SAN JOSÉ DEL SUR']),
+    P('CARACCIOLO PARRA OLMEDO', 'MÉRIDA', ['FLORENCIO RAMÍREZ', 'TUCANÍ']), P('CARDENAL QUINTERO', 'MÉRIDA', ['LAS PIEDRAS', 'SANTO DOMINGO']),
+    P('GUARAQUE', 'MÉRIDA', ['GUARAQUE', 'MESA DE QUINTERO', 'RÍO NEGRO']), P('JULIO CÉSAR SALAS', 'MÉRIDA', ['ARAPUEY', 'PALMIRA']),
+    P('JUSTO BRICEÑO', 'MÉRIDA', ['SAN CRISTÓBAL DE TORONDOY', 'TORONDOY']),
+    P('LIBERTADOR', 'MÉRIDA', ['ANTONIO SPINETTI DINI', 'ARIAS', 'CARACCIOLO PARRA PÉREZ', 'DOMINGO PEÑA', 'EL LLANO', 'EL MORRO', 'GONZALO PICÓN FEBRES', 'JACINTO PLAZA',
+      'JUAN RODRÍGUEZ SUÁREZ', 'LASSO DE LA VEGA', 'LOS NEVADOS', 'MARIANO PICÓN SALAS', 'MILLA', 'OSUNA RODRÍGUEZ', 'SAGRARIO']),
+    P('MIRANDA', 'MÉRIDA', ['ANDRÉS ELOY BLANCO', 'LA VENTA', 'PIÑANGO', 'TIMOTES']), P('OBISPO RAMOS DE LORA', 'MÉRIDA', ['ELOY PAREDES', 'SAN RAFAEL DE ALCÁZAR', 'SANTA ELENA DE ARENALES']),
+    P('PADRE NOGUERA', 'MÉRIDA', ['SANTA MARÍA DE CAPARO']), P('PUEBLO LLANO', 'MÉRIDA', ['PUEBLO LLANO']),
+    P('RANGEL', 'MÉRIDA', ['CACUTE', 'LA TOMA', 'MUCUCHÍES', 'MUCURUBÁ', 'SAN RAFAEL']), P('RIVAS DÁVILA', 'MÉRIDA', ['BAILADORES', 'GERÓNIMO MALDONADO']),
+    P('SANTOS MARQUINA', 'MÉRIDA', ['TABAY']), P('SUCRE', 'MÉRIDA', ['CHIGUARÁ', 'ESTÁNQUEZ', 'LA TRAMPA', 'LAGUNILLAS', 'PUEBLO NUEVO DEL SUR', 'SAN JUAN']),
+    P('TOVAR', 'MÉRIDA', ['EL AMPARO', 'EL LLANO', 'SAN FRANCISCO', 'TOVAR']),
+    P('TULIO FEBRES CORDERO', 'MÉRIDA', ['INDEPENDENCIA', 'MARÍA DE LA CONCEPCIÓN PALACIOS BLANCO', 'NUEVA BOLIVIA', 'SANTA APOLONIA']),
+    P('ZEA', 'MÉRIDA', ['CAÑO EL TIGRE', 'ZEA']),
+    P('SUCRE (ZULIA)', 'ZULIA', ['BOBURES', 'EL BATEY', 'GIBRALTAR', 'HERAS', 'MONSEÑOR ARTURO CELESTINO ÁLVAREZ', 'RÓMULO GALLEGOS'])
+  ] };
+  var territorio = TERRITORIO_INICIAL;
+  function rotulo(v) {
+    var menores = { de: 1, del: 1, la: 1, las: 1, los: 1, el: 1, y: 1 };
+    return String(v || '').toLowerCase().split(' ').map(function (p, i) {
+      return (i > 0 && menores[p]) ? p : p.replace(/^(\(?)(\S)/, function (m, a, b) { return a + b.toUpperCase(); });
+    }).join(' ');
+  }
+  function ubicacionObligatoria(tipo) { return (territorio.obligatoria || []).indexOf(tipo) !== -1; }
+  function marcarUbicacion() {
+    var ob = ubicacionObligatoria($('tipoHecho').value);
+    $('ubicMarca').textContent = ob ? '(obligatoria para este tipo de hecho)' : '(opcional)';
+    $('ubicMarca').className = ob ? 'requerida' : 'opcional';
+  }
+  function municipioActual() {
+    var v = $('municipio').value;
+    return (territorio.municipios || []).filter(function (m) { return m.v === v; })[0] || null;
+  }
+  function pintarParroquias() {
+    var sel = $('parroquia'), previo = sel.value, m = municipioActual();
+    while (sel.options.length > 1) sel.remove(1);
+    (m ? m.p : []).forEach(function (p) { var o = document.createElement('option'); o.value = p.v; o.textContent = p.r || rotulo(p.v); sel.appendChild(o); });
+    sel.disabled = !m;
+    sel.value = m && m.p.some(function (p) { return p.v === previo; }) ? previo : '';
+    pintarSectores();
+  }
+  function pintarSectores() {
+    var dl = $('listaSectores'), mun = $('municipio').value, par = $('parroquia').value;
+    dl.innerHTML = '';
+    (territorio.sectores || []).forEach(function (s) {
+      if (mun && s.m && s.m !== mun) return;
+      if (par && s.p && s.p !== par) return;
+      var o = document.createElement('option'); o.value = s.s; dl.appendChild(o);
+    });
+  }
+  function pintarTerritorio(t) {
+    territorio = t && Array.isArray(t.municipios) && t.municipios.length ? t : TERRITORIO_INICIAL;
+    if (!territorio.obligatoria) territorio.obligatoria = TERRITORIO_INICIAL.obligatoria;
+    var sel = $('municipio'), previo = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    var entidadAnterior = '';
+    territorio.municipios.forEach(function (m) {
+      var o = document.createElement('option'); o.value = m.v;
+      o.textContent = (m.r || rotulo(m.v)) + (m.e && m.e !== 'MÉRIDA' && (m.r || '').indexOf('(') === -1 && m.v.indexOf('(') === -1 ? ' (' + rotulo(m.e) + ')' : '');
+      sel.appendChild(o);
+      entidadAnterior = m.e;
+    });
+    sel.value = territorio.municipios.some(function (m) { return m.v === previo; }) ? previo : '';
+    pintarParroquias();
+    marcarUbicacion();
+  }
+  $('municipio').addEventListener('change', function () { this.classList.remove('invalido'); pintarParroquias(); });
+  $('parroquia').addEventListener('change', pintarSectores);
+  $('direccion').addEventListener('input', function () { this.classList.remove('invalido'); });
+  (function () { var g = null; try { g = JSON.parse(localStorage.getItem('simir_territorio') || 'null'); } catch (e) {} pintarTerritorio(g); })();
+
   cargarTiposHecho();
 
   if (!initData) {
